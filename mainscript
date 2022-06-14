@@ -1,0 +1,99 @@
+#!/bin/sh
+#############################################
+#add your conda env path
+export PATH="/your/conda/env/path/bin/:$PATH"
+refpath=/your/path/human/ref/genome.fna
+Vrefpath=/your/path/virus/ref/genome.fna
+fastqPATH=/your/sample/fastq/folder/path
+
+for samp in $0
+do
+ResP=/your/result/folder/path/${samp}
+#exsample /home/virin/results/${samp}
+mkdir -p ${ResP}
+
+
+#step0_mapped hg38
+#refpath=/home/suwalakc/ref/hs38d1_genomic.fna
+bwa mem ${refpath} ${fastqPATH}/${samp}_1.fastq.gz ${fastqPATH}/${samp}_2.fastq.gz | samtools sort -o ${ResP}/0_${samp}.sort.bam -
+samtools index ${ResP}/0_${samp}.sort.bam
+
+
+#step 1 unmapped
+echo "step 1 unmapped $samp"
+echo "----------------------------------------------------"
+echo ""
+samtools view -@ ${n_threads} -f 4 -bh ${ResP}/0_${samp}.sort.bam > ${ResP}/1.0_${samp}_00.bam 
+samtools view -@ ${n_threads} -f 4 -F 264 -bh ${ResP}/0_${samp}.sort.bam> ${ResP}/1.0_${samp}_01.bam
+
+echo "step2 clip extraction $samp"
+echo "----------------------------------------------------"
+
+#SE-MEI path
+cd ~/SE-MEI/
+./extractSoftclipped -l 30 ${ResP}/0_${samp}.sort.bam > ${ResP}/2.0_${samp}_clip.fastq.gz
+
+
+echo "step2 bam to fastq"
+echo "----------------------------------------------------"
+echo ""
+samtools fastq  ${ResP}/1.0_${samp}_00.bam > ${ResP}/2.0_${samp}_00.fq
+samtools fastq  ${ResP}/1.0_${samp}_01.bam > ${ResP}/2.0_${samp}_01.fq
+gunzip ${ResP}/2.0_${samp}_clip.fastq.gz
+
+
+echo "step3 trim SLIDINGWINDOW:4:20 MINLEN:50"
+echo "----------------------------------------------------"
+
+trimmomatic SE -phred33 -summary ${ResP}/3.1_${samp}_TrimStat00.txt ${ResP}/2.0_${samp}_00.fq ${ResP}/3.0_${samp}_00.trim.fq SLIDINGWINDOW:4:20 MINLEN:50
+trimmomatic SE -phred33 -summary ${ResP}/3.1_${samp}_TrimStat01.txt ${ResP}/2.0_${samp}_01.fq ${ResP}/3.0_${samp}_01.trim.fq SLIDINGWINDOW:4:20 MINLEN:50
+trimmomatic SE -phred33 -summary ${ResP}/3.1_${samp}_TrimStatclip.txt ${ResP}/2.0_${samp}_clip.fastq ${ResP}/3.0_${samp}_clip.trim.fq SLIDINGWINDOW:4:20 MINLEN:50
+
+echo "step4  viral ref by Bowtie2"
+echo "----------------------------------------------------"
+bowtie2 --local --no-unal -x ${Vrefpath} ${ResP}/3.0_${samp}_00.trim.fq | samtools sort -o ${ResP}/4.0_${samp}_00.V.sort.bam -
+bowtie2 --local --no-unal -x ${Vrefpath} -U ${ResP}/3.0_${samp}_01.trim.fq | samtools sort -o ${ResP}/4.0_${samp}_01.V.sort.bam -
+bowtie2 --local --no-unal -x ${Vrefpath} -U ${ResP}/3.0_${samp}_clip.trim.fq | samtools sort -o ${ResP}/4.0_${samp}_clip.V.bam -
+
+echo "Step 4.1 count number of virus"
+echo "----------------------------------------------------"
+for unmap in clip 00 01
+do
+samtools index ${ResP}/4.0_${samp}_${unmap}.V.sort.bam
+samtools idxstats ${ResP}/4.0_${samp}_${unmap}.V.sort.bam > ${ResP}/4.1_${samp}_${unmap}.V.sort.tsv
+
+echo "step 5 extract readname of Virus mapped"
+echo "----------------------------------------------------"
+samtools view ${ResP}/4.0_${samp}_${unmap}.V.sort.bam | cut -f1 -d ":" |cut -f1 -d '/'> ${ResP}/5.0_${samp}_${unmap}.readnV.tsv
+
+echo "step 6 extract alignment file only mapped V read in bam hg38 .."
+echo "----------------------------------------------------"
+samtools view -bh -N ${ResP}/5.0_${samp}_${unmap}.readnV.tsv ${ResP}/0_${samp}.sort.bam -o ${ResP}/6.0_${samp}_${unmap}.readnV.bam
+samtools index ${ResP}/6.0_${samp}_${unmap}.readnV.bam
+
+
+#extract only mapped V read in sam hg38
+echo "step 7 bedtools and cluster."
+echo "----------------------------------------------------"
+bedtools genomecov -bg -ibam ${ResP}/6.0_${samp}_${unmap}.readnV.bam | bedtools cluster -d 200 -i |awk '$4>5'| awk '!arr[$5] {arr[$5]=$0; if(prevline) print prevline; print} {prevline=$0}' > ${ResP}/7.0_${samp}_${unmap}.V.bed
+bedtools genomecov -bg -ibam ${ResP}/6.0_${samp}_${unmap}.readnV.bam | bedtools cluster -d 200 -i |awk '$4>5'| tail -1 >> ${ResP}/7.0_${samp}_${unmap}.V.bed
+
+###Group 1 clauster = 1 line
+echo "step 8 group of cluster."
+echo "----------------------------------------------------"
+awk 'NR % 2 == 1'  ${ResP}/7.0_${samp}_${unmap}.V.bed| cut -f1,2 >  ${ResP}/tmp.8.0_${samp}_${unmap}.V.bed
+awk 'NR % 2 == 0'  ${ResP}/7.0_${samp}_${unmap}.V.bed| cut -f3,4,5 >  ${ResP}/tmp.8.0_${samp}_${unmap}.V.bed
+paste ${ResP}/tmp.8.0_${samp}_${unmap}.V.bed ${ResP}/tmp.8.0_${samp}_${unmap}.V.bed > ${ResP}/9.0_${samp}_${unmap}.V.cluster.bed
+rm -r ${ResP}/tmp.8.0*
+
+echo "step 9 intersect position with Repeatmarker or knowngene from UCSC."
+echo "----------------------------------------------------"
+bedtools intersect -a ${ref}/RepeatMask.Class.bed -b ${ResP}/9.0_${samp}_${unmap}.V.cluster.bed> ${ResP}/9.1_repeat_${samp}_${unmap}.V.cluster.bed
+bedtools intersect -a ${ref}/knowgene.bed -b ${ResP}/9.0_${samp}_${unmap}.V.cluster.bed > ${ResP}/9.2_gene_${samp}_${unmap}.V.cluster.bed
+
+done
+
+echo "${samp} finished run"
+done
+
+echo "DONE DONE DONE"
