@@ -8,6 +8,7 @@ https://docs.conda.io/en/latest/miniconda.html
 Install following tools inyour conda environment
 
 BWA
+trimmomatic
 samtools
 bowtie2
 bedtools
