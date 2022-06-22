@@ -15,5 +15,7 @@ Install following tools in your conda environment
 - SE-MEI (https://github.com/dpryan79/SE-MEI)
 
 # Requirement database
+- human genome
 https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_40/GRCh38.p13.genome.fa.gz
+- virus database
 https://ftp.ncbi.nlm.nih.gov/refseq/release/viral/
